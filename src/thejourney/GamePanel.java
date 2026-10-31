@@ -1,131 +1,183 @@
 package thejourney;
 
-import java.awt.Graphics;
-import java.awt.Dimension;
-import java.awt.Graphics2D;
 import java.awt.Color;
+import java.awt.Dimension;
+import java.awt.Font;
+import java.awt.FontMetrics;
+import java.awt.Graphics;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
+import java.awt.event.FocusAdapter;
+import java.awt.event.FocusEvent;
+import java.awt.event.KeyEvent;
+import java.util.concurrent.locks.LockSupport;
 
 import javax.swing.JPanel;
 
-public class GamePanel extends JPanel implements Runnable{
+import thejourney.entity.Player;
+import thejourney.input.InputState;
+import thejourney.input.KeyHandler;
 
-    //SCREEN SETTINGS
-    final int originalTileSize = 16; //16x16 tile size
+@SuppressWarnings({"serial", "this-escape"})
+public class GamePanel extends JPanel implements Runnable {
 
-    //scale
-    final int scale = 3;
+    private static final long NANOS_PER_SECOND = 1_000_000_000L;
+    private static final Font DEBUG_FONT = new Font(Font.MONOSPACED, Font.PLAIN, 12);
+    private static final Font PAUSE_FONT = new Font(Font.SANS_SERIF, Font.BOLD, 24);
+    private static final Color PAUSE_OVERLAY_COLOR = new Color(0, 0, 0, 160);
 
-    final int tileSize = originalTileSize * scale;  // 48x48 tiles
+    private final InputState input = new InputState();
+    private final KeyHandler keyHandler = new KeyHandler(input);
+    private final Player player = new Player(input);
+    private final Thread gameThread;
 
-    //max screen coloumn & row
-
-    final int maxScreenCol = 16;
-    final int maxScreenRow = 12 ;
-
-    final int screenWidth = tileSize * maxScreenCol; // 768 pixels
-    final int screenHeight = tileSize * maxScreenRow; // 576 pixels
-    
-    // fps
-
-    int FPS = 60;
-    KeyHandler keyH = new KeyHandler();
-
-    // gmae thread
-
-    Thread gameThread;
-
-    // SET PLAYER's default position
-    int playerX = 100;
-    int playerY = 100;
-    int playerSpeed = 4;
+    private volatile boolean running;
+    private volatile GameState gameState = GameState.PLAYING;
+    private volatile int fps;
+    private volatile int ups;
 
     public GamePanel() {
-        this.setPreferredSize (new Dimension(screenWidth, screenHeight));
-        this.setBackground(Color.BLACK);
-        this.setDoubleBuffered(true);
-        this.addKeyListener(keyH);
-        this.setFocusable(true);
+        setPreferredSize(new Dimension(Constants.SCREEN_WIDTH, Constants.SCREEN_HEIGHT));
+        setBackground(Color.BLACK);
+        setDoubleBuffered(true);
+        setFocusable(true);
+
+        addKeyListener(keyHandler);
+        addFocusListener(new FocusAdapter() {
+            @Override
+            public void focusLost(FocusEvent e) {
+                input.clear();
+            }
+        });
+
+        gameThread = new Thread(this, "thejourney-game-loop");
     }
 
     public void startGameThread() {
-         gameThread = new Thread(this);
-         gameThread.start();
+        if (running) {
+            return;
+        }
+
+        running = true;
+        gameThread.start();
+    }
+
+    public void stopGameThread() {
+        if (!running) {
+            return;
+        }
+
+        running = false;
+        gameThread.interrupt();
+
+        try {
+            gameThread.join(1000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     @Override
-    public void run(){
+    public void run() {
+        final double updateInterval = (double) NANOS_PER_SECOND / Constants.TARGET_UPS;
+        final long maxFrameTime = (long) (Constants.MAX_FRAME_TIME_SECONDS * NANOS_PER_SECOND);
 
-        double drawInterval = 1000000000/FPS; //
-        double delta = 0;
         long lastTime = System.nanoTime();
-        long currentTime;
-        long timer = 0;
-        int drawCount = 0;
+        double accumulator = 0;
+        long secondTimer = 0;
+        int frameCount = 0;
+        int updateCount = 0;
 
+        while (running) {
+            long frameStart = System.nanoTime();
+            long elapsed = frameStart - lastTime;
+            lastTime = frameStart;
 
-        while (gameThread != null) {
-            currentTime = System.nanoTime();
-
-            delta += (currentTime - lastTime) / drawInterval;
-            timer += (currentTime - lastTime);
-            lastTime = currentTime;
-
-            if (delta >= 1) {
-                update();
-                repaint();
-                delta --;
-                drawCount++;
+            if (elapsed > maxFrameTime) {
+                elapsed = maxFrameTime;
             }
 
-            if(timer >= 1000000000) {
-                System.out.println("FPS:" + drawCount);
-                drawCount = 0;
-                timer = 0;
+            accumulator += elapsed;
+            secondTimer += elapsed;
+
+            while (accumulator >= updateInterval) {
+                update(1.0 / Constants.TARGET_UPS);
+                accumulator -= updateInterval;
+                updateCount++;
             }
 
-        }
-
-        //while
-
-        while(gameThread != null) {
-
-            // 1. UPDATE: update information such as character positions
-            update();
-            // 2. DRAW  : draw the screen with the updated information
             repaint();
-        }
+            frameCount++;
 
+            if (secondTimer >= NANOS_PER_SECOND) {
+                fps = frameCount;
+                ups = updateCount;
+                frameCount = 0;
+                updateCount = 0;
+                secondTimer = 0;
+            }
+
+            long frameTime = System.nanoTime() - frameStart;
+            long sleepTime = (long) updateInterval - frameTime;
+            if (sleepTime > 0) {
+                LockSupport.parkNanos(sleepTime);
+            }
+        }
     }
 
-    public void update() {
-
-        // player's possition control
-
-        if(keyH.upPressed == true) {
-            playerY -= playerSpeed;
+    private void update(double deltaTime) {
+        if (input.wasPressed(KeyEvent.VK_ESCAPE)) {
+            gameState = gameState == GameState.PLAYING
+                    ? GameState.PAUSED
+                    : GameState.PLAYING;
         }
 
-        else if (keyH.downPressed == true) {
-            playerY += playerSpeed;
-        }
-        else if (keyH.leftPressed == true) {
-            playerX -= playerSpeed;
-        }
-        else if (keyH.rightPressed == true) {
-            playerX += playerSpeed;
+        if (gameState == GameState.PLAYING) {
+            player.update(deltaTime);
         }
 
+        input.endFrame();
     }
-    public void paintComponent(Graphics g) {
 
-        super.paintComponent (g);
+    @Override
+    protected void paintComponent(Graphics g) {
+        super.paintComponent(g);
 
-        Graphics2D g2 = (Graphics2D) g;
+        Graphics2D g2 = (Graphics2D) g.create();
+        try {
+            g2.setRenderingHint(
+                    RenderingHints.KEY_INTERPOLATION,
+                    RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR
+            );
 
-        g2.setColor(Color.white);
+            player.render(g2);
 
-        g2.fillRect (playerX, playerY, tileSize, tileSize); 
-        
-        g2.dispose();
-    } 
+            if (gameState == GameState.PAUSED) {
+                g2.setColor(PAUSE_OVERLAY_COLOR);
+                g2.fillRect(0, 0, getWidth(), getHeight());
+
+                g2.setColor(Color.WHITE);
+                g2.setFont(PAUSE_FONT);
+
+                String text = "PAUSED";
+                FontMetrics metrics = g2.getFontMetrics();
+                int textX = (getWidth() - metrics.stringWidth(text)) / 2;
+                int textY = (getHeight() - metrics.getHeight()) / 2 + metrics.getAscent();
+
+                g2.drawString(text, textX, textY);
+            }
+
+            if (Constants.DEBUG_OVERLAY) {
+                g2.setFont(DEBUG_FONT);
+                g2.setColor(Color.LIGHT_GRAY);
+                g2.drawString(
+                        "FPS: " + fps + "  UPS: " + ups + "  State: " + gameState,
+                        8,
+                        16
+                );
+            }
+        } finally {
+            g2.dispose();
+        }
+    }
 }
