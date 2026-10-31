@@ -16,6 +16,7 @@ public final class Constants {
     public static final double MAX_FRAME_TIME_SECONDS = 0.25;
 
     public static final double PLAYER_SPEED = 120.0;
+    public static final int PLAYER_MAX_HP = 100;
 
     public static final boolean DEBUG_OVERLAY = true;
 }

@@ -3,6 +3,7 @@
 
 # Java build output
 out/
+out-test/
 build/
 target/
 

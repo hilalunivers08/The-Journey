@@ -29,6 +29,18 @@ public class Main {
             }
         });
 
+        window.addWindowFocusListener(new WindowAdapter() {
+            @Override
+            public void windowGainedFocus(WindowEvent e) {
+                gamePanel.requestFocusInWindow();
+            }
+
+            @Override
+            public void windowLostFocus(WindowEvent e) {
+                gamePanel.handleFocusLost();
+            }
+        });
+
         window.setVisible(true);
         gamePanel.requestFocusInWindow();
         gamePanel.startGameThread();
